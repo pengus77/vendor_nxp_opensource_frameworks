@@ -1,5 +1,5 @@
 /*
- * Copyright 2019 NXP
+ * Copyright 2019-2020 NXP
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -44,6 +44,7 @@ public class SemsOmapiApduChannel implements ISemsApduChannel {
   private static Context sContext;
   private static byte meSEIdx;
   private static SemsOmapiApduChannel sOmapiChannel = null;
+  private BindToSEService bindService = null;
 
   /**
    * Returns SemsOmapiApduChannel singleton object
@@ -105,23 +106,27 @@ public class SemsOmapiApduChannel implements ISemsApduChannel {
   }
 
   private void bindSEService() {
-    BindToSEService bindService = new BindToSEService();
+    connectionTimer = new Timer();
+    connectionTimer.schedule(mTimerTask, SERVICE_CONNECTION_TIME_OUT);
+    bindService = new BindToSEService();
     bindService.start();
   }
 
   private void getSession() throws SemsException {
 
     waitForConnection();
-    if(seService == null){
-      Log.d(TAG, "SeService connection failed shall retry");
-      try{
-        new Thread().sleep(500);
-      } catch(Exception e) {
-        Log.d(TAG, "Thread interruption exception received");
+    while (seService == null &&
+           (bindService != null && bindService.isAlive())) {
+      try {
+        Log.d(TAG, "Retry on SeService connection failure");
+        new Thread().sleep(SERVICE_CONNECTION_TIME_OUT/6);
+      } catch (Exception e) {
+        Log.d(TAG, "getSession Thread interruption exception received");
       }
-      mbIsConnected =  false;
-      bindSEService();
-      waitForConnection();
+    }
+    if (seService == null) {
+      Log.d(TAG, "Unable to establish connection - exiting");
+      return;
     }
     Reader[] readers = seService.getReaders();
     if (readers.length > meSEIdx) {
@@ -226,10 +231,21 @@ public class SemsOmapiApduChannel implements ISemsApduChannel {
 
   class BindToSEService extends Thread {
     public void run() {
-      connectionTimer = new Timer();
-      connectionTimer.schedule(mTimerTask, SERVICE_CONNECTION_TIME_OUT);
-      seService = new SEService(sContext, mExecutor, mListener);
-      Log.d(TAG, "Bind to SE service");
+      int max_retry = 0;
+
+      do {
+        seService = new SEService(sContext, mExecutor, mListener);
+        if(seService == null) {
+          try {
+            new Thread().sleep(SERVICE_CONNECTION_TIME_OUT/6);
+            Log.d(TAG, "Bind to SE service fails" + max_retry);
+          } catch (Exception e) {
+            Log.d(TAG, "BindToSEService Thread interruption exception received");
+          }
+        }
+      } while (seService == null && (max_retry++ < 3));
+      if(seService != null)
+        Log.d(TAG, "Bind to SE service Success");
     }
   }
 }
